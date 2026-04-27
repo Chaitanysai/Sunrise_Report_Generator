@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Build outputs
+.next/
+dist/
+build/
+*.egg-info/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs & runtime
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local uploads / processed files
+backend/tmp/
+backend/uploads/
