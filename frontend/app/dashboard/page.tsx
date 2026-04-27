@@ -123,7 +123,7 @@ export default function DashboardPage() {
               Control Sheet Automation
             </h1>
             <p className="mt-4 max-w-2xl text-lg text-slate-600">
-              Automate control-sheet health checks, incidents and date shifts. Upload your workbook and we'll handle the rest—RAG colors shifted, dates updated, metadata stamped.
+              Automate control-sheet health checks, incidents and date shifts. Upload your workbook and we&apos;ll handle the rest—RAG colors shifted, dates updated, metadata stamped.
             </p>
           </div>
 
