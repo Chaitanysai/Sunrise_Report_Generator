@@ -16,6 +16,6 @@ services:
       - key: SUPABASE_BUCKET
         value: processed-workbooks
       - key: CORS_ORIGINS
-        sync: false
+        value: http://localhost:3000,https://sunrise-report-generator.vercel.app
       - key: DOWNLOAD_URL_TTL_SECONDS
         value: "3600"

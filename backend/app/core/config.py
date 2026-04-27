@@ -12,6 +12,11 @@ from typing import List
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "https://sunrise-report-generator.vercel.app",
+]
+
 
 class Settings(BaseSettings):
     """Runtime configuration. All values come from the environment."""
@@ -27,7 +32,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     port: int = 8000
     log_level: str = "info"
-    cors_origins: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: List[str] = Field(default_factory=lambda: DEFAULT_CORS_ORIGINS.copy())
 
     # --- Supabase ---
     supabase_url: str = ""
@@ -40,8 +45,14 @@ class Settings(BaseSettings):
     def _split_origins(cls, value):
         """Allow CORS_ORIGINS to be a comma-separated string in .env."""
         if isinstance(value, str):
-            return [origin.strip() for origin in value.split(",") if origin.strip()]
-        return value
+            value = [origin.strip() for origin in value.split(",") if origin.strip()]
+        if isinstance(value, list):
+            merged: list[str] = []
+            for origin in [*value, *DEFAULT_CORS_ORIGINS]:
+                if origin and origin not in merged:
+                    merged.append(origin)
+            return merged
+        return DEFAULT_CORS_ORIGINS.copy()
 
 
 @lru_cache
