@@ -45,7 +45,7 @@ export default function HistoryTable({ items, loading }: HistoryTableProps) {
             <tr key={item.id} className="text-sm hover:bg-ink-50/60">
               <Td className="text-ink-600">{formatDate(item.created_at)}</Td>
               <Td className="font-mono text-xs text-ink-800">{item.case_number}</Td>
-              <Td className="max-w-[24ch] truncate text-ink-900" title={item.filename}>
+              <Td className="max-w-[24ch] truncate text-ink-900">
                 {item.filename}
               </Td>
               <Td className="text-ink-600">{formatSize(item.file_size_bytes)}</Td>
