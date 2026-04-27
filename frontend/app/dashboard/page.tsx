@@ -6,15 +6,19 @@ import HistoryTable from "@/components/HistoryTable";
 import {
   ApiError,
   HistoryItem,
+  IncidentInput,
   ProcessResponse,
   fetchHistory,
   processWorkbook,
 } from "@/lib/api";
 
+const EMPTY_INCIDENT: IncidentInput = { incident: "", case_no: "" };
+
 export default function DashboardPage() {
   const [file, setFile] = useState<File | null>(null);
-  const [incident, setIncident] = useState("");
-  const [caseNumber, setCaseNumber] = useState("");
+  const [incidents, setIncidents] = useState<IncidentInput[]>([
+    { ...EMPTY_INCIDENT },
+  ]);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +42,36 @@ export default function DashboardPage() {
     void loadHistory();
   }, []);
 
-  const canSubmit = !!file && incident.trim().length > 0 && caseNumber.trim().length > 0;
+  const canSubmit =
+    !!file &&
+    incidents.length > 0 &&
+    incidents.every(
+      (item) => item.incident.trim().length > 0 && item.case_no.trim().length > 0,
+    );
+
+  const updateIncident = (
+    index: number,
+    field: keyof IncidentInput,
+    value: string,
+  ) => {
+    setIncidents((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [field]: value } : item,
+      ),
+    );
+  };
+
+  const addIncidentRow = () => {
+    setIncidents((current) => [...current, { ...EMPTY_INCIDENT }]);
+  };
+
+  const removeIncidentRow = (index: number) => {
+    setIncidents((current) =>
+      current.length === 1
+        ? [{ ...EMPTY_INCIDENT }]
+        : current.filter((_, itemIndex) => itemIndex !== index),
+    );
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -50,14 +83,15 @@ export default function DashboardPage() {
     try {
       const res = await processWorkbook({
         file,
-        incident: incident.trim(),
-        caseNumber: caseNumber.trim(),
+        incidents: incidents.map((item) => ({
+          incident: item.incident.trim(),
+          case_no: item.case_no.trim(),
+        })),
       });
       setResult(res);
       // Reset for the next run, but keep the form responsive:
       setFile(null);
-      setIncident("");
-      setCaseNumber("");
+      setIncidents([{ ...EMPTY_INCIDENT }]);
       void loadHistory();
     } catch (err) {
       const message =
@@ -96,40 +130,85 @@ export default function DashboardPage() {
           <form onSubmit={handleSubmit} className="space-y-6">
             <FilePicker file={file} onFileChange={setFile} disabled={submitting} />
 
-            <div>
-              <label htmlFor="case" className="label">
-                Case number
-              </label>
-              <input
-                id="case"
-                type="text"
-                placeholder="INC-2026-00421"
-                value={caseNumber}
-                onChange={(e) => setCaseNumber(e.target.value)}
-                className="input font-mono"
-                disabled={submitting}
-                maxLength={100}
-                required
-              />
-            </div>
-
-            <div>
-              <label htmlFor="incident" className="label">
-                Incident description
-              </label>
-              <textarea
-                id="incident"
-                rows={4}
-                placeholder="Brief description of the incident — context, scope, impact…"
-                value={incident}
-                onChange={(e) => setIncident(e.target.value)}
-                className="input resize-none"
-                disabled={submitting}
-                maxLength={2000}
-                required
-              />
-              <div className="mt-1 text-right text-[11px] text-ink-400">
-                {incident.length} / 2000
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="label">Incidents</div>
+                  <p className="text-xs text-ink-500">
+                    Add one or more incident and case-number pairs for this run.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={addIncidentRow}
+                  className="btn-secondary text-xs"
+                  disabled={submitting}
+                >
+                  + Add Incident
+                </button>
+              </div>
+              <div className="space-y-3">
+                {incidents.map((item, index) => (
+                  <div
+                    key={index}
+                    className="rounded-lg border border-ink-200 bg-ink-50/60 p-4"
+                  >
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="text-xs font-medium uppercase tracking-[0.14em] text-ink-500">
+                        Incident {index + 1}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeIncidentRow(index)}
+                        className="text-xs font-medium text-danger disabled:text-ink-300"
+                        disabled={submitting || incidents.length === 1}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                      <div>
+                        <label htmlFor={`incident-${index}`} className="label">
+                          Incident description
+                        </label>
+                        <textarea
+                          id={`incident-${index}`}
+                          rows={3}
+                          placeholder="Brief description of the incident — context, scope, impact…"
+                          value={item.incident}
+                          onChange={(e) =>
+                            updateIncident(index, "incident", e.target.value)
+                          }
+                          className="input resize-none"
+                          disabled={submitting}
+                          maxLength={2000}
+                          required
+                        />
+                        <div className="mt-1 text-right text-[11px] text-ink-400">
+                          {item.incident.length} / 2000
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor={`case-${index}`} className="label">
+                          Case number
+                        </label>
+                        <input
+                          id={`case-${index}`}
+                          type="text"
+                          placeholder="INC-2026-00421"
+                          value={item.case_no}
+                          onChange={(e) =>
+                            updateIncident(index, "case_no", e.target.value)
+                          }
+                          className="input font-mono"
+                          disabled={submitting}
+                          maxLength={100}
+                          required
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -225,8 +304,8 @@ function ResultPanel({ result }: { result: ProcessResponse | null }) {
       </div>
       <div className="space-y-4 p-5 text-sm">
         <Field label="Filename" value={result.filename} mono />
-        <Field label="Case number" value={result.case_number} mono />
-        <Field label="Incident" value={result.incident} clamp />
+        <Field label="Case numbers" value={result.case_number} mono clamp />
+        <Field label="Incidents" value={result.incident} clamp />
         <a
           href={result.download_url}
           className="btn-primary mt-2 w-full"
@@ -258,7 +337,7 @@ function Field({
     <div>
       <div className="label">{label}</div>
       <div
-        className={`text-ink-900 ${mono ? "font-mono text-xs" : "text-sm"} ${
+        className={`whitespace-pre-line text-ink-900 ${mono ? "font-mono text-xs" : "text-sm"} ${
           clamp ? "line-clamp-3" : ""
         }`}
       >

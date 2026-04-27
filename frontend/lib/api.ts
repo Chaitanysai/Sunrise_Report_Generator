@@ -9,11 +9,17 @@ const BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
   "http://localhost:8000";
 
+export interface IncidentInput {
+  incident: string;
+  case_no: string;
+}
+
 export interface ProcessResponse {
   id: string;
   filename: string;
   incident: string;
   case_number: string;
+  incidents: IncidentInput[];
   download_url: string;
   created_at: string;
 }
@@ -52,13 +58,11 @@ async function readError(response: Response): Promise<string> {
 
 export async function processWorkbook(params: {
   file: File;
-  incident: string;
-  caseNumber: string;
+  incidents: IncidentInput[];
 }): Promise<ProcessResponse> {
   const formData = new FormData();
   formData.append("file", params.file);
-  formData.append("incident", params.incident);
-  formData.append("case_number", params.caseNumber);
+  formData.append("incidents", JSON.stringify(params.incidents));
 
   const response = await fetch(`${BASE_URL}/api/process`, {
     method: "POST",

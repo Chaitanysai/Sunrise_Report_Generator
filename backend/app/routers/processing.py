@@ -15,6 +15,7 @@ prefers a one-shot upload→download with no intermediate storage step.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from io import BytesIO
@@ -25,7 +26,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import get_supabase_service
-from app.models.schemas import HistoryItem, ProcessResponse
+from app.models.schemas import HistoryItem, IncidentInput, ProcessResponse
 from app.services.supabase_service import SupabaseService
 from app.services.workbook_processor import process_workbook
 
@@ -46,25 +47,24 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB — control sheets are small
 )
 async def process_endpoint(
     file: UploadFile = File(..., description="The .xlsx control sheet to process."),
-    incident: str = Form(..., min_length=1, max_length=2000),
-    case_number: str = Form(..., min_length=1, max_length=100),
+    incidents: str = Form(...),
     supabase: SupabaseService = Depends(get_supabase_service),
 ) -> ProcessResponse:
+    parsed_incidents = _parse_incidents(incidents)
     raw = await _read_validated_xlsx(file)
 
     try:
         result = process_workbook(
             source_bytes=raw,
-            incident=incident.strip(),
-            case_number=case_number.strip(),
+            incidents=parsed_incidents,
         )
     except Exception:  # noqa: BLE001 — we want a graceful 500 with audit trail
         logger.exception("Workbook processing failed")
         try:
             supabase.insert_history(
                 filename=file.filename or "unknown.xlsx",
-                incident=incident,
-                case_number=case_number,
+                incident=_summarise_incidents(parsed_incidents),
+                case_number=_summarise_case_numbers(parsed_incidents),
                 download_path="",
                 file_size_bytes=len(raw),
                 status="failed",
@@ -77,13 +77,16 @@ async def process_endpoint(
             detail="Failed to process workbook.",
         )
 
-    object_key = _build_object_key(case_number, file.filename or "control-sheet.xlsx")
+    object_key = _build_object_key(
+        parsed_incidents[0].case_no,
+        file.filename or "control-sheet.xlsx",
+    )
     supabase.upload_workbook(object_key=object_key, content=result.content)
 
     history_row = supabase.insert_history(
         filename=file.filename or "control-sheet.xlsx",
-        incident=incident.strip(),
-        case_number=case_number.strip(),
+        incident=_summarise_incidents(parsed_incidents),
+        case_number=_summarise_case_numbers(parsed_incidents),
         download_path=object_key,
         file_size_bytes=len(result.content),
     )
@@ -95,6 +98,7 @@ async def process_endpoint(
         filename=history_row["filename"],
         incident=history_row["incident"],
         case_number=history_row["case_number"],
+        incidents=parsed_incidents,
         download_url=download_url,
         created_at=history_row["created_at"],
     )
@@ -106,15 +110,14 @@ async def process_endpoint(
 @router.post("/process/stream")
 async def process_stream_endpoint(
     file: UploadFile = File(...),
-    incident: str = Form(..., min_length=1, max_length=2000),
-    case_number: str = Form(..., min_length=1, max_length=100),
+    incidents: str = Form(...),
 ) -> StreamingResponse:
+    parsed_incidents = _parse_incidents(incidents)
     raw = await _read_validated_xlsx(file)
     try:
         result = process_workbook(
             source_bytes=raw,
-            incident=incident.strip(),
-            case_number=case_number.strip(),
+            incidents=parsed_incidents,
         )
     except Exception:
         logger.exception("Workbook processing failed (stream mode)")
@@ -185,6 +188,41 @@ async def _read_validated_xlsx(file: UploadFile) -> bytes:
             detail=f"File too large (>{MAX_UPLOAD_BYTES // (1024*1024)} MB).",
         )
     return raw
+
+
+def _parse_incidents(raw_incidents: str) -> list[IncidentInput]:
+    try:
+        payload = json.loads(raw_incidents)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid incidents payload.") from exc
+
+    if not isinstance(payload, list) or not payload:
+        raise HTTPException(status_code=400, detail="At least one incident is required.")
+
+    incidents: list[IncidentInput] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="Invalid incidents payload.")
+        incident = str(item.get("incident", "")).strip()
+        case_no = str(item.get("case_no", "")).strip()
+        if not incident or not case_no:
+            raise HTTPException(
+                status_code=400,
+                detail="Each incident requires incident and case_no.",
+            )
+        if len(incident) > 2000 or len(case_no) > 100:
+            raise HTTPException(status_code=400, detail="Incident payload is too large.")
+        incidents.append(IncidentInput(incident=incident, case_no=case_no))
+
+    return incidents
+
+
+def _summarise_incidents(incidents: list[IncidentInput]) -> str:
+    return "\n".join(item.incident for item in incidents)
+
+
+def _summarise_case_numbers(incidents: list[IncidentInput]) -> str:
+    return "\n".join(item.case_no for item in incidents)
 
 
 def _build_object_key(case_number: str, original_name: str) -> str:

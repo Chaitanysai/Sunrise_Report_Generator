@@ -203,11 +203,16 @@ class ProcessingResult:
     rows_touched: int
 
 
+@dataclass(frozen=True)
+class IncidentInput:
+    incident: str
+    case_no: str
+
+
 def process_workbook(
     *,
     source_bytes: bytes,
-    incident: str,
-    case_number: str,
+    incidents: list[IncidentInput],
 ) -> ProcessingResult:
     """Apply all transformations and return the processed workbook as bytes.
 
@@ -215,10 +220,8 @@ def process_workbook(
     ----------
     source_bytes:
         Raw ``.xlsx`` content as uploaded by the client.
-    incident:
-        Free-text incident description — written to column I on qualifying rows.
-    case_number:
-        Case reference — written to column J on qualifying rows.
+    incidents:
+        One or more incident / case-reference pairs to apply to matching rows.
 
     Returns
     -------
@@ -228,8 +231,8 @@ def process_workbook(
         ``rows_touched``     – aggregate data rows modified across all sheets.
     """
     logger.info(
-        "Processing workbook: incident=%r case_number=%r size=%d bytes",
-        incident, case_number, len(source_bytes),
+        "Processing workbook: incidents=%d size=%d bytes",
+        len(incidents), len(source_bytes),
     )
 
     workbook: Workbook = load_workbook(
@@ -244,8 +247,7 @@ def process_workbook(
         logger.info("Processing sheet: %r  max_row=%s", sheet.title, sheet.max_row)
         touched = _process_sheet(
             sheet,
-            incident=incident,
-            case_number=case_number,
+            incidents=incidents,
         )
         total_rows_touched += touched
         logger.info("Sheet %r: %d rows touched", sheet.title, touched)
@@ -273,8 +275,7 @@ def process_workbook(
 def _process_sheet(
     sheet: Worksheet,
     *,
-    incident: str,
-    case_number: str,
+    incidents: list[IncidentInput],
 ) -> int:
     """Run all transformations over a single worksheet.
 
@@ -293,8 +294,7 @@ def _process_sheet(
             row_touched = _process_row(
                 sheet,
                 row_idx=row_idx,
-                incident=incident,
-                case_number=case_number,
+                incidents=incidents,
                 advance_dates=date_sheet,
                 native_green_fill=native_green_fill,
             )
@@ -317,8 +317,7 @@ def _process_row(
     sheet: Worksheet,
     *,
     row_idx: int,
-    incident: str,
-    case_number: str,
+    incidents: list[IncidentInput],
     advance_dates: bool,
     native_green_fill: PatternFill,
 ) -> bool:
@@ -342,15 +341,24 @@ def _process_row(
     modified = True
 
     # ------------------------------------------------------------------ #
-    # 2. Incident override based on column B text                        #
+    # 2. Incident override based on matching incident descriptions       #
     # ------------------------------------------------------------------ #
+    report_text = str(sheet[f"{COL_REPORT_TEXT}{row_idx}"].value or "")
     existing_incident_text = sheet[f"{COL_INCIDENT}{row_idx}"].value
-    incident_fill = _classify_incident_fill(incident, existing_incident_text)
+    matching_incidents = [
+        item for item in incidents if _incident_matches_row(item.incident, report_text)
+    ]
+    incident_fill = _classify_incident_fill(
+        existing_incident_text,
+        *(item.incident for item in matching_incidents),
+    )
 
-    if incident_fill is not None:
-        cell_h.fill = _solid(incident_fill)
-        sheet[f"{COL_INCIDENT}{row_idx}"] = incident
-        sheet[f"{COL_CASE_NO}{row_idx}"] = case_number
+    if matching_incidents:
+        if incident_fill is not None:
+            cell_h.fill = _solid(incident_fill)
+        for item in matching_incidents:
+            _append_cell_value(sheet[f"{COL_INCIDENT}{row_idx}"], item.incident)
+            _append_cell_value(sheet[f"{COL_CASE_NO}{row_idx}"], item.case_no)
     elif _is_red_fill(original_h_fill) or _is_blue_fill(original_h_fill):
         cell_h.fill = original_h_fill
 
@@ -414,6 +422,25 @@ def _advance_date(sheet: Worksheet, row_idx: int) -> None:
 # Micro-utilities
 # ---------------------------------------------------------------------------
 
+MATCH_STOP_WORDS = {
+    "report",
+    "reports",
+    "file",
+    "files",
+    "source",
+    "delay",
+    "missing",
+    "for",
+    "the",
+    "and",
+    "with",
+    "from",
+    "daily",
+    "weekly",
+    "monthly",
+}
+
+
 def _normalise(value: object) -> Optional[str]:
     """Lowercase + strip a cell value; return None if not a non-empty string."""
     if not isinstance(value, str):
@@ -421,3 +448,67 @@ def _normalise(value: object) -> Optional[str]:
     normalised = re.sub(r"\s+", " ", value.strip().lower())
     normalised = re.sub(r"\s*-\s*", " -", normalised)
     return normalised or None
+
+
+def _incident_matches_row(incident_text: str, report_text: str) -> bool:
+    normalised_incident = _normalise_for_matching(incident_text)
+    normalised_report = _normalise_for_matching(report_text)
+    if not normalised_incident or not normalised_report:
+        return False
+
+    # Strongest signal: the report identifier/phrase appears verbatim once
+    # both sides are normalised for spacing and punctuation.
+    if normalised_report in normalised_incident:
+        return True
+
+    report_tokens = _match_tokens(report_text)
+    incident_tokens = _match_tokens(incident_text)
+    if not report_tokens or not incident_tokens:
+        return False
+
+    shared_tokens = report_tokens & incident_tokens
+    if len(shared_tokens) >= 2:
+        return True
+
+    # Allow one-token matches only for distinctive anchors such as acronyms,
+    # system codes, or very short report names like "SDP".
+    return any(_is_distinctive_token(token) for token in shared_tokens)
+
+
+def _normalise_for_matching(value: object) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _match_tokens(value: object) -> set[str]:
+    text = _normalise_for_matching(value)
+    return {
+        token
+        for token in text.split()
+        if len(token) >= 3 and token not in MATCH_STOP_WORDS
+    }
+
+
+def _is_distinctive_token(token: str) -> bool:
+    return bool(
+        re.search(r"\d", token)
+        or len(token) <= 4
+        or token.endswith(("sdp", "etl", "api", "ftp"))
+    )
+
+
+def _append_cell_value(cell, value: str) -> None:
+    clean_value = value.strip()
+    if not clean_value:
+        return
+
+    existing = str(cell.value or "").strip()
+    if not existing:
+        cell.value = clean_value
+        return
+
+    parts = [part.strip() for part in existing.splitlines() if part.strip()]
+    if clean_value not in parts:
+        parts.append(clean_value)
+        cell.value = "\n".join(parts)

@@ -9,6 +9,11 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+class IncidentInput(BaseModel):
+    incident: str
+    case_no: str
+
+
 class ProcessResponse(BaseModel):
     """Returned after a successful workbook processing run."""
 
@@ -16,6 +21,7 @@ class ProcessResponse(BaseModel):
     filename: str
     incident: str
     case_number: str
+    incidents: list[IncidentInput]
     download_url: str = Field(
         ..., description="Signed URL to the processed workbook (short-lived)."
     )
