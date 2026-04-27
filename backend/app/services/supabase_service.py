@@ -25,10 +25,24 @@ class SupabaseService:
 
     def __init__(self, settings: Settings):
         self._settings = settings
-        self._client: Client = create_client(
-            settings.supabase_url,
-            settings.supabase_service_role_key,
-        )
+        if settings.supabase_url.rstrip("/").endswith("/rest/v1"):
+            logger.warning(
+                "SUPABASE_URL appears to be a REST endpoint (%s). "
+                "Expected the project base URL like https://<project>.supabase.co.",
+                settings.supabase_url,
+            )
+        try:
+            self._client: Client = create_client(
+                settings.supabase_url,
+                settings.supabase_service_role_key,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to create Supabase client (url=%s, key_present=%s)",
+                settings.supabase_url,
+                bool(settings.supabase_service_role_key),
+            )
+            raise
 
     # ------------------------------------------------------------------ storage
 
@@ -102,13 +116,22 @@ class SupabaseService:
 
     def list_history(self, *, limit: int = 50) -> List[Dict[str, Any]]:
         """Most-recent-first slice of the audit log."""
-        response = (
-            self._client.table(_HISTORY_TABLE)
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        try:
+            response = (
+                self._client.table(_HISTORY_TABLE)
+                .select("*")
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+        except Exception:
+            logger.exception(
+                "Failed to query %s from Supabase (limit=%s, url=%s)",
+                _HISTORY_TABLE,
+                limit,
+                self._settings.supabase_url,
+            )
+            raise
         return response.data or []
 
     def get_history(self, history_id: UUID) -> Optional[Dict[str, Any]]:

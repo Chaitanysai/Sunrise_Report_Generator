@@ -81,17 +81,28 @@ async def process_endpoint(
         parsed_incidents[0].case_no,
         file.filename or "control-sheet.xlsx",
     )
-    supabase.upload_workbook(object_key=object_key, content=result.content)
+    try:
+        supabase.upload_workbook(object_key=object_key, content=result.content)
 
-    history_row = supabase.insert_history(
-        filename=file.filename or "control-sheet.xlsx",
-        incident=_summarise_incidents(parsed_incidents),
-        case_number=_summarise_case_numbers(parsed_incidents),
-        download_path=object_key,
-        file_size_bytes=len(result.content),
-    )
+        history_row = supabase.insert_history(
+            filename=file.filename or "control-sheet.xlsx",
+            incident=_summarise_incidents(parsed_incidents),
+            case_number=_summarise_case_numbers(parsed_incidents),
+            download_path=object_key,
+            file_size_bytes=len(result.content),
+        )
 
-    download_url = supabase.signed_download_url(object_key)
+        download_url = supabase.signed_download_url(object_key)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Supabase persistence failed during process request (file=%s, object_key=%s)",
+            file.filename,
+            object_key,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist processed workbook.",
+        )
 
     return ProcessResponse(
         id=history_row["id"],
@@ -139,31 +150,38 @@ def history_endpoint(
     limit: int = 50,
     supabase: SupabaseService = Depends(get_supabase_service),
 ) -> List[HistoryItem]:
-    rows = supabase.list_history(limit=min(max(limit, 1), 200))
-    items: List[HistoryItem] = []
-    for row in rows:
-        download_url: str | None = None
-        if row.get("status") == "success" and row.get("download_path"):
-            try:
-                download_url = supabase.signed_download_url(row["download_path"])
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Could not mint signed URL for %s", row["download_path"],
+    try:
+        rows = supabase.list_history(limit=min(max(limit, 1), 200))
+        items: List[HistoryItem] = []
+        for row in rows:
+            download_url: str | None = None
+            if row.get("status") == "success" and row.get("download_path"):
+                try:
+                    download_url = supabase.signed_download_url(row["download_path"])
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Could not mint signed URL for %s", row["download_path"],
+                    )
+            items.append(
+                HistoryItem(
+                    id=row["id"],
+                    filename=row["filename"],
+                    incident=row["incident"],
+                    case_number=row["case_number"],
+                    status=row["status"],
+                    file_size_bytes=row.get("file_size_bytes"),
+                    error_message=row.get("error_message"),
+                    download_url=download_url,
+                    created_at=row["created_at"],
                 )
-        items.append(
-            HistoryItem(
-                id=row["id"],
-                filename=row["filename"],
-                incident=row["incident"],
-                case_number=row["case_number"],
-                status=row["status"],
-                file_size_bytes=row.get("file_size_bytes"),
-                error_message=row.get("error_message"),
-                download_url=download_url,
-                created_at=row["created_at"],
             )
+        return items
+    except Exception:  # noqa: BLE001
+        logger.exception("History endpoint failed (limit=%s)", limit)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load processing history.",
         )
-    return items
 
 
 # ---------------------------------------------------------------------------
