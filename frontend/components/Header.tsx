@@ -1,17 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { logout } from "@/lib/auth";
 
 export default function Header() {
-  const router = useRouter();
-
-  const handleLogout = () => {
-    logout();
-    router.replace("/login");
-  };
-
   return (
     <header className="border-b border-ink-200 bg-white/80 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
@@ -26,10 +17,6 @@ export default function Header() {
             </div>
           </div>
         </Link>
-
-        <button onClick={handleLogout} className="btn-secondary text-xs">
-          Sign out
-        </button>
       </div>
     </header>
   );
