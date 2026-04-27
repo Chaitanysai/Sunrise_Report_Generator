@@ -21,6 +21,7 @@ Business rules (sourced from app.py):
 from __future__ import annotations
 
 import logging
+import re
 from copy import copy
 from dataclasses import dataclass
 from datetime import date
@@ -46,10 +47,45 @@ logger = logging.getLogger(__name__)
 # shade the spreadsheet owner chose.  See _sample_native_green().
 AMBER = "FFFFC000"
 RED   = "FFFF0000"
+BLUE_RGB_SUFFIXES = {"0000FF", "00B0F0", "5B9BD5", "4F81BD"}
 
 def _solid(argb: str) -> PatternFill:
     """Return a new solid PatternFill for the given ARGB hex string."""
     return PatternFill(fill_type="solid", fgColor=Color(argb))
+
+
+def _fill_rgb(fill: PatternFill) -> Optional[str]:
+    color = getattr(fill, "fgColor", None)
+    rgb = getattr(color, "rgb", None)
+    if not rgb:
+        return None
+    return str(rgb).upper()
+
+
+def _is_red_fill(fill: PatternFill) -> bool:
+    rgb = _fill_rgb(fill)
+    return bool(rgb and rgb.endswith("FF0000"))
+
+
+def _is_blue_fill(fill: PatternFill) -> bool:
+    rgb = _fill_rgb(fill)
+    return bool(rgb and any(rgb.endswith(suffix) for suffix in BLUE_RGB_SUFFIXES))
+
+
+def _classify_incident_fill(*texts: object) -> Optional[str]:
+    haystack = " ".join(str(text or "") for text in texts).upper()
+    if not haystack.strip():
+        return None
+    if (
+        "CRITICAL" in haystack
+        or "URGENT" in haystack
+        or "FILE MISSING" in haystack
+        or "MISSING FILE" in haystack
+    ):
+        return RED
+    if "SDP" in haystack:
+        return AMBER
+    return None
 
 
 def _sample_native_green(sheet: Worksheet) -> PatternFill:
@@ -298,6 +334,7 @@ def _process_row(
     cell_f = sheet[f"{COL_F}{row_idx}"]
     cell_g = sheet[f"{COL_G}{row_idx}"]
     cell_h = sheet[f"{COL_H}{row_idx}"]
+    original_h_fill = copy(cell_h.fill)
 
     cell_f.fill = copy(cell_g.fill)
     cell_g.fill = copy(cell_h.fill)
@@ -307,17 +344,15 @@ def _process_row(
     # ------------------------------------------------------------------ #
     # 2. Incident override based on column B text                        #
     # ------------------------------------------------------------------ #
-    report_text = str(sheet[f"{COL_REPORT_TEXT}{row_idx}"].value or "").upper()
+    existing_incident_text = sheet[f"{COL_INCIDENT}{row_idx}"].value
+    incident_fill = _classify_incident_fill(incident, existing_incident_text)
 
-    if "SDP" in report_text:
-        # AMBER override + write incident metadata
-        cell_h.fill = _solid(AMBER)
+    if incident_fill is not None:
+        cell_h.fill = _solid(incident_fill)
         sheet[f"{COL_INCIDENT}{row_idx}"] = incident
-        sheet[f"{COL_CASE_NO}{row_idx}"]  = case_number
-
-    # CRITICAL / URGENT takes precedence over SDP if both appear
-    if "CRITICAL" in report_text or "URGENT" in report_text:
-        cell_h.fill = _solid(RED)
+        sheet[f"{COL_CASE_NO}{row_idx}"] = case_number
+    elif _is_red_fill(original_h_fill) or _is_blue_fill(original_h_fill):
+        cell_h.fill = original_h_fill
 
     # ------------------------------------------------------------------ #
     # 3. Date advancement (only on sheets that carry a frequency column) #
@@ -383,4 +418,6 @@ def _normalise(value: object) -> Optional[str]:
     """Lowercase + strip a cell value; return None if not a non-empty string."""
     if not isinstance(value, str):
         return None
-    return value.strip().lower() or None
+    normalised = re.sub(r"\s+", " ", value.strip().lower())
+    normalised = re.sub(r"\s*-\s*", " -", normalised)
+    return normalised or None
